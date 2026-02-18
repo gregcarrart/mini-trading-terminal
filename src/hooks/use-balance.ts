@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { createKeypair } from "@/lib/solana";
+import { createConnection, getKeypairOrNull, getTokenBalance } from "@/lib/solana";
 import { getCodexClient } from "@/lib/codex";
 import Decimal from "decimal.js";
 import { Codex } from "@codex-data/sdk";
@@ -10,70 +10,75 @@ export const useBalance = (tokenAddress: string, tokenDecimals: number, nativeDe
   const [tokenBalance, setTokenBalance] = useState<number>(0);
   const [tokenAtomicBalance, setTokenAtomicBalance] = useState<Decimal>(new Decimal(0));
   const [loading, setLoading] = useState<boolean>(true);
-  const [ codexClient, setCodexClient ] = useState<Codex | null>(null);
+  const [codexClient, setCodexClient] = useState<Codex | null>(null);
 
   useEffect(() => {
-    const sdk = getCodexClient();
-    setCodexClient(sdk);
+    try { setCodexClient(getCodexClient()); } catch { setCodexClient(null); }
   }, []);
 
   const refreshBalance = useCallback(async () => {
     try {
-      if (!codexClient) {
-        return;
-      }
-
-      const keypair = createKeypair(import.meta.env.VITE_SOLANA_PRIVATE_KEY);
-      const walletAddress = keypair.publicKey.toBase58();
+      const keypair = getKeypairOrNull(import.meta.env.VITE_SOLANA_PRIVATE_KEY);
+      const walletAddress = keypair?.publicKey.toBase58();
       setLoading(true);
 
-      const balanceResponse = await codexClient?.queries.balances({
-        input: {
-          networks: [networkId],
-          walletAddress: walletAddress,
-          includeNative: true,
-        },
-      });
-
-      // Process native balance (SOL)
-      const nativeTokenId = `native:${networkId}`;
-      const nativeBalanceItem = balanceResponse?.balances?.items.find(
-        item => item.tokenId === nativeTokenId
-      );
-
-      if (nativeBalanceItem) {
-        const atomicBalance = new Decimal(nativeBalanceItem.balance);
-        setNativeAtomicBalance(atomicBalance);
-        setNativeBalance(atomicBalance.div(10 ** nativeDecimals).toNumber());
+      if (keypair && import.meta.env.VITE_HELIUS_RPC_URL) {
+        try {
+          const connection = createConnection();
+          const lamports = await connection.getBalance(keypair.publicKey);
+          const atomic = new Decimal(lamports);
+          setNativeAtomicBalance(atomic);
+          setNativeBalance(atomic.div(10 ** nativeDecimals).toNumber());
+        } catch (err: unknown) {
+          console.warn("SOL balance fetch failed:", err);
+          setNativeAtomicBalance(new Decimal(0));
+          setNativeBalance(0);
+        }
       } else {
         setNativeAtomicBalance(new Decimal(0));
         setNativeBalance(0);
       }
 
-      // Process token balance
-      const tokenTokenId = `${tokenAddress}:${networkId}`;
-      const tokenBalanceItem = balanceResponse?.balances?.items.find(
-        item => item.tokenId === tokenTokenId
-      );
+      let tokenFound = false;
+      if (keypair && import.meta.env.VITE_HELIUS_RPC_URL) {
+        try {
+          const connection = createConnection();
+          const atomic = await getTokenBalance(walletAddress!, tokenAddress, connection);
+          if (atomic.gt(0)) {
+            setTokenAtomicBalance(atomic);
+            setTokenBalance(atomic.div(10 ** tokenDecimals).toNumber());
+            tokenFound = true;
+          }
+        } catch { /* fall through to Codex */ }
+      }
 
-      if (tokenBalanceItem) {
-        setTokenAtomicBalance(new Decimal(tokenBalanceItem.balance));
-        setTokenBalance(new Decimal(tokenBalanceItem.balance).div(10 ** tokenDecimals).toNumber());
-      } else {
+      if (!tokenFound && codexClient && walletAddress) {
+        const balanceResponse = await codexClient.queries.balances({
+          input: { networks: [networkId], walletAddress, includeNative: false },
+        });
+        const item = balanceResponse?.balances?.items.find(
+          (i) => i.tokenId === `${tokenAddress}:${networkId}`
+        );
+        if (item) {
+          const atomic = new Decimal(item.balance);
+          setTokenAtomicBalance(atomic);
+          setTokenBalance(atomic.div(10 ** tokenDecimals).toNumber());
+        } else {
+          setTokenAtomicBalance(new Decimal(0));
+          setTokenBalance(0);
+        }
+      } else if (!tokenFound) {
         setTokenAtomicBalance(new Decimal(0));
         setTokenBalance(0);
       }
-
-      setLoading(false);
     } catch (error) {
       console.error("Error fetching balances:", error);
+    } finally {
       setLoading(false);
     }
   }, [tokenAddress, networkId, codexClient, nativeDecimals, tokenDecimals]);
 
-  useEffect(() => {
-    refreshBalance();
-  }, [refreshBalance]);
+  useEffect(() => { refreshBalance(); }, [refreshBalance]);
 
   return { nativeBalance, nativeAtomicBalance, tokenBalance, tokenAtomicBalance, loading, refreshBalance };
 };

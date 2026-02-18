@@ -1,55 +1,48 @@
 import { useCallback } from "react";
 import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
-import { NATIVE_MINT } from "@solana/spl-token";
 import Decimal from "decimal.js";
-import Jupiter from "@/lib/jupiter";
-import { bn } from "@/lib/utils";
 import { VersionedTransaction } from "@solana/web3.js";
+import { fetchClmmPoolsForToken, buildClmmSwapTransaction } from "@/lib/raydium";
+import { createConnection } from "@/lib/solana";
 
-export const useTrade = (
-  tokenAddress: string,
-  tokenAtomicBalance: Decimal,
-) => {
+export const useTrade = (tokenAddress: string, tokenAtomicBalance: Decimal) => {
   const createTransaction = useCallback(
-    async (params: { direction: "buy" | "sell", value: number, signer: PublicKey }) => {
+    async (params: {
+      direction: "buy" | "sell";
+      value: number;
+      signer: PublicKey;
+    }): Promise<VersionedTransaction> => {
       const { direction, value, signer } = params;
 
-      let atomicAmount;
-      if (direction === "buy") {
-        atomicAmount = new Decimal(value).mul(LAMPORTS_PER_SOL);
-      } else {
-        atomicAmount = tokenAtomicBalance.mul(value).div(100);
+      const amountIn = direction === "buy"
+        ? BigInt(new Decimal(value).mul(LAMPORTS_PER_SOL).trunc().toFixed(0))
+        : BigInt(tokenAtomicBalance.mul(value).div(100).trunc().toFixed(0));
+
+      if (amountIn <= BigInt(0)) throw new Error("Amount must be greater than zero");
+
+      const connection = createConnection();
+      const tokenMint = new PublicKey(tokenAddress);
+      const pools = await fetchClmmPoolsForToken(connection, tokenMint);
+
+      if (pools.length === 0) {
+        const mintStr = tokenMint.toBase58();
+        throw new Error(
+          `No Raydium CLMM pool found for ${mintStr.slice(0, 8)}…${mintStr.slice(-4)}. Ensure mainnet RPC and a valid CLMM pool.`
+        );
       }
 
-      // Get order from Jupiter
-      const data = await Jupiter.getOrder({
-        inputMint:
-          direction === "buy" ? NATIVE_MINT : new PublicKey(tokenAddress),
-        outputMint:
-          direction === "buy" ? new PublicKey(tokenAddress) : NATIVE_MINT,
-        amount: bn(atomicAmount),
-        signer,
+      return buildClmmSwapTransaction({
+        connection,
+        pool: pools[0],
+        payer: signer,
+        amountIn,
+        minAmountOut: BigInt(0),
+        direction,
+        tokenMint,
       });
-
-      if (data.error) {
-        throw new Error(data.error);
-      }
-
-      if (data.transaction === null) {
-        throw new Error("Invalid data from Jupiter.getOrder");
-      }
-
-      // Parse the transaction from base64
-      const transactionBuffer = Buffer.from(data.transaction, "base64");
-      const transaction = VersionedTransaction.deserialize(transactionBuffer);
-
-
-      return transaction;
     },
-    [tokenAddress, tokenAtomicBalance],
+    [tokenAddress, tokenAtomicBalance]
   );
-  
-  return {
-    createTransaction,
-  };
+
+  return { createTransaction };
 };

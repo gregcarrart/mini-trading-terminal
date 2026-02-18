@@ -1,11 +1,15 @@
 import { Codex } from "@codex-data/sdk";
 import { Link, useParams } from "react-router-dom";
 import { useEffect, useState, Suspense } from "react";
+import { Zap } from "lucide-react";
 import { TokenChart, ChartDataPoint } from "@/components/TokenChart";
 import { TradingPanel } from "@/components/TradingPanel";
+import { InstantTradePanel } from "@/components/InstantTradePanel";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EnhancedToken, PairFilterResult, PairRankingAttribute, RankingDirection } from "@codex-data/sdk/dist/sdk/generated/graphql";
+import { useInstantTradeStore } from "@/store/instant-trade-store";
+import { cn } from "@/lib/utils";
 
 type TokenEvent = {
   id: string;
@@ -19,6 +23,7 @@ type TokenEvent = {
 export default function TokenPage() {
   const { networkId, tokenId } = useParams<{ networkId: string; tokenId: string }>();
   const networkIdNum = parseInt(networkId || '', 10);
+  const { isOpen: instantTradeOpen, toggle: toggleInstantTrade } = useInstantTradeStore();
 
   const [details, setDetails] = useState<EnhancedToken | undefined>(undefined);
   const [pairs, setPairs] = useState<PairFilterResult[]>([]);
@@ -153,6 +158,19 @@ export default function TokenPage() {
             <TokenChart data={bars} title={`${tokenSymbol || 'Token'} Price Chart`} />
           </Suspense>
 
+          <button
+            onClick={toggleInstantTrade}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-sm transition-all cursor-pointer border",
+              instantTradeOpen
+                ? "bg-yellow-500/15 text-yellow-400 border-yellow-500/40"
+                : "bg-muted/30 text-muted-foreground border-border hover:bg-muted/50 hover:text-foreground"
+            )}
+          >
+            <Zap size={14} />
+            Instant Trade
+          </button>
+
           <Card>
             <CardHeader>
               <CardTitle>Recent Transactions</CardTitle>
@@ -261,6 +279,10 @@ export default function TokenPage() {
           </Card>
         </div>
       </div>
+
+      {instantTradeOpen && details && (
+        <InstantTradePanel token={details} />
+      )}
     </main>
   );
 }

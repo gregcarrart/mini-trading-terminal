@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { EnhancedToken } from "@codex-data/sdk/dist/sdk/generated/graphql";
 import { useBalance } from "@/hooks/use-balance";
 import { useTrade } from "@/hooks/use-trade";
-import { confirmTransaction, createConnection, createKeypair, sendTransaction, signTransaction } from "@/lib/solana";
+import { confirmTransaction, createConnection, getKeypairOrNull, sendTransaction, signTransaction } from "@/lib/solana";
 
 interface TradingPanelProps {
   token: EnhancedToken
@@ -21,17 +21,18 @@ export function TradingPanel({ token }: TradingPanelProps) {
   const { nativeBalance: solanaBalance, tokenBalance, tokenAtomicBalance, loading, refreshBalance } = useBalance(token.address, Number(token.decimals), 9, Number(token.networkId));
   const { createTransaction } = useTrade(token.address, tokenAtomicBalance);
 
-  const keypair = createKeypair(import.meta.env.VITE_SOLANA_PRIVATE_KEY);
+  const keypair = getKeypairOrNull(import.meta.env.VITE_SOLANA_PRIVATE_KEY);
   const connection = createConnection();
 
   const handleTrade = useCallback(async () => {
+    if (!keypair) return;
     const toastId = toast.loading("Submitting trade request...");
     try {
       const transaction =
-        await createTransaction({ 
-          direction: tradeMode, 
-          value: tradeMode === "buy" ? parseFloat(buyAmount) : parseFloat(sellPercentage), 
-          signer: keypair.publicKey 
+        await createTransaction({
+          direction: tradeMode,
+          value: tradeMode === "buy" ? parseFloat(buyAmount) : parseFloat(sellPercentage),
+          signer: keypair.publicKey,
         });
 
       toast.loading("Signing transaction...", { id: toastId });
@@ -48,17 +49,17 @@ export function TradingPanel({ token }: TradingPanelProps) {
       }
       toast.success(`Trade successful! TX: ${signature.slice(0, 8)}...`, { id: toastId }); 
 
-      // Refresh balance after 1 second
       setTimeout(refreshBalance, 1000);
     } catch (error) {
-      toast.error((error as Error).message, { id: toastId });
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(message, { id: toastId });
     }
   }, [tradeMode, buyAmount, sellPercentage, createTransaction, keypair, connection, refreshBalance]);
 
   const solBuyAmountPresets = [0.0001, 0.001, 0.01, 0.1];
   const percentagePresets = [25, 50, 75, 100];
 
-  if (!import.meta.env.VITE_SOLANA_PRIVATE_KEY || !import.meta.env.VITE_HELIUS_RPC_URL || !import.meta.env.VITE_JUPITER_REFERRAL_ACCOUNT) {
+  if (!keypair || !import.meta.env.VITE_HELIUS_RPC_URL) {
     return (
       <Card>
         <CardHeader>
@@ -66,7 +67,7 @@ export function TradingPanel({ token }: TradingPanelProps) {
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">
-            Trading requires VITE_SOLANA_PRIVATE_KEY, VITE_HELIUS_RPC_URL and VITE_JUPITER_REFERRAL_ACCOUNT to be configured in environment variables.
+            Trading requires VITE_SOLANA_PRIVATE_KEY and VITE_HELIUS_RPC_URL. Only tokens with a Raydium CLMM pool (SOL pair) are supported.
           </p>
         </CardContent>
       </Card>
